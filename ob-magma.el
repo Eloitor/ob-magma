@@ -5,7 +5,7 @@
 ;; Author: Thibaut Verron
 ;; Keywords: literate programming, reproducible research, magma
 ;; Homepage: https://github.com/ThibautVerron/ob-magma
-;; Version: 0.01
+;; Version: 0.02
 
 ;;; License:
 
@@ -25,6 +25,10 @@
 ;; Boston, MA 02110-1301, USA.
 
 ;;; Commentary:
+
+;; This file provides support for Magma evaluation within org-babel. It includes two modes of execution:
+;; 1. **magma**: Evaluation in a local Magma session, using comint.
+;; 2. **magma-free**: Evaluation through an HTTP API, suitable for users who do not have a local Magma installation.
 
 ;; These functions provide support for magma evaluation with
 ;; org-babel. Evaluation is made in a unique magma session by default,
@@ -57,6 +61,8 @@
 (require 'ob-eval)
 (require 's)
 (require 'dash)
+(require 'url)
+(require 'xml)
 
 ;; possibly require modes required for your language
 (require 'magma-mode)
@@ -67,6 +73,7 @@
 
 ;; optionally declare default header arguments for this language
 (defvar org-babel-default-header-args:magma '())
+(defvar org-babel-default-header-args:magma-free '())
 
 (defconst org-babel-magma-eoe "end-of-echo")
 (defconst org-babel-magma-prompt "[> ")
@@ -262,6 +269,40 @@ Return the initialized session."
 
 
 
+;; magma-free functions
+(defun magma-send-request (input)
+  "Send INPUT to the Magma calculator API and return the response."
+  (let ((url-request-method "GET")
+        (url (format "http://magma.maths.usyd.edu.au/xml/calculator.xml?input=%s" (url-hexify-string input))))
+    (with-current-buffer (url-retrieve-synchronously url)
+      (goto-char (point-min))
+      (re-search-forward "\n\n")
+      (let ((response (buffer-substring (point) (point-max))))
+        (kill-buffer (current-buffer))
+        response))))
+
+(defun magma-parse-response (response)
+  "Parse the XML RESPONSE from Magma and return the result as a string."
+  (let ((xml (with-temp-buffer
+               (insert response)
+               (xml-parse-region (point-min) (point-max)))))
+    (mapconcat (lambda (line)
+                 (car (xml-node-children line)))
+               (xml-get-children (car (xml-get-children (car xml) 'results)) 'line)
+               "\n")))
+
+(defun org-babel-execute:magma-free (body params)
+  "Execute a block of Magma code with org-babel via the Magma API."
+  (message "executing Magma-free source code block via API")
+  (let* ((processed-params (org-babel-process-params params))
+         (expanded-body (org-babel-expand-body:magma body params))
+         (response (magma-send-request expanded-body))
+         (result (magma-parse-response response)))
+    (if (or (eq (cdr (assoc :result-type params)) 'value))
+        (org-babel-script-escape result)
+      result)))
+
+;; magma-free does not require session management, so no session functions are defined
 
 
 (provide 'ob-magma)
